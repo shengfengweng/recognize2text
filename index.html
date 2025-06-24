@@ -15,18 +15,25 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
+        // --- 設定 ---
+        // 警告：請勿將含有此金鑰的檔案部署到公開伺服器！
+        // 僅供本地開發測試使用。
+        const API_KEY = "請在此貼上您的 Gemini API 金鑰";
+
         // Gemini API Client
         const GeminiAPIClient = {
-            apiKey: "apiKey" : "AIzaSyAqiRjyNcXhZZ2II_8PKsdu-AWwOBzeU_A", // 請替換為您的實際 Gemini API 金鑰
             baseURL: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
 
             async generateSentences(word) {
+                if (API_KEY === "請在此貼上您的 Gemini API 金鑰") {
+                    throw new Error("尚未設定 Gemini API 金鑰");
+                }
                 if (!word.trim()) {
                     console.log("無有效單詞，跳過句子生成");
                     return [];
                 }
                 const prompt = `Generate three short, general-purpose sentences using the word '${word}'. Each sentence should be unique, concise, and unrelated to tides or marine themes. Format each sentence on a new line.`;
-                const url = `${this.baseURL}?key=${this.apiKey}`;
+                const url = `${this.baseURL}?key=${API_KEY}`;
                 const body = {
                     contents: [{ parts: [{ text: prompt }] }]
                 };
@@ -38,11 +45,15 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(body)
                     });
-                    if (!response.ok) {
-                        console.error(`API 回應錯誤：狀態碼 ${response.status}`);
-                        throw new Error('Bad server response');
-                    }
+
                     const data = await response.json();
+
+                    if (!response.ok) {
+                        const errorMsg = data.error?.message || `API 回應錯誤：狀態碼 ${response.status}`;
+                        console.error(errorMsg);
+                        throw new Error(errorMsg);
+                    }
+                    
                     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
                     const sentences = text.split('\n')
                         .map(s => s.trim())
@@ -52,7 +63,8 @@
                     return sentences;
                 } catch (error) {
                     console.error('句子生成失敗：', error);
-                    return [];
+                    // 將錯誤向上拋出，以便 UI 層可以捕捉並顯示
+                    throw error;
                 }
             }
         };
@@ -61,20 +73,19 @@
         function SentenceDetailModal({ word, sentences, onClose }) {
             return (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                    <div className="bg-white dark:bg-gray-800 p-6 rounded-lg max-w-md w-full">
-                        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">生成的句子</h2>
-                        <h3 className="text-lg font-medium text-gray-900 dark:text-white">{word}</h3>
+                    <div className="bg-white dark:bg-gray-800 p-6 rounded-lg max-w-md w-full mx-4">
+                        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">針對 "<span className="text-blue-500">{word}</span>" 生成的句子</h2>
                         <ul className="mt-4 space-y-2">
                             {sentences.map((sentence, index) => (
                                 <li key={index} className="flex items-start text-gray-700 dark:text-gray-300">
-                                    <span className="mr-2">•</span>
+                                    <span className="mr-2 text-blue-500">•</span>
                                     <span>{sentence}</span>
                                 </li>
                             ))}
                         </ul>
                         <button
                             onClick={onClose}
-                            className="mt-6 w-full bg-red-500 text-white py-2 rounded-lg hover:bg-red-600"
+                            className="mt-6 w-full bg-red-500 text-white py-2 rounded-lg hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-400"
                         >
                             關閉
                         </button>
@@ -95,11 +106,11 @@
             const tesseractWorkerRef = useRef(null);
             const lastRecognizedTextRef = useRef(null);
             const stableCountRef = useRef(0);
-            const stabilityThreshold = 5;
+            const stabilityThreshold = 5; // 辨識結果穩定多少次才觸發
 
             // 檢查是否在安全環境
             useEffect(() => {
-                if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
+                if (window.location.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(window.location.hostname)) {
                     setError('此應用程式需要 HTTPS 或 localhost 環境才能存取相機');
                 }
             }, []);
@@ -107,19 +118,19 @@
             // 初始化相機和 Tesseract
             useEffect(() => {
                 async function setup() {
+                    if (error) return; // 如果已有錯誤，則不進行設定
+
                     // 初始化 Tesseract Worker
                     try {
                         console.log("正在初始化 Tesseract Worker...");
-                        tesseractWorkerRef.current = await Tesseract.createWorker({
-                            lang: 'eng',
+                        tesseractWorkerRef.current = await Tesseract.createWorker('eng', 1, {
                             logger: m => console.log('Tesseract 進度：', m)
                         });
-                        await tesseractWorkerRef.current.loadLanguage('eng');
-                        await tesseractWorkerRef.current.initialize('eng');
                         console.log("Tesseract Worker 初始化完成");
                     } catch (err) {
                         console.error("Tesseract 初始化失敗：", err);
                         setError("無法初始化文字辨識引擎");
+                        return;
                     }
 
                     // 存取相機
@@ -139,21 +150,7 @@
                         }
                     } catch (error) {
                         console.error('相機存取失敗：', error);
-                        setError('無法存取相機，請檢查權限或嘗試使用前置相機');
-                        // 嘗試使用前置相機作為後備
-                        try {
-                            const stream = await navigator.mediaDevices.getUserMedia({
-                                video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
-                            });
-                            if (videoRef.current) {
-                                videoRef.current.srcObject = stream;
-                                videoRef.current.play();
-                                console.log("前置相機存取成功");
-                            }
-                        } catch (fallbackError) {
-                            console.error('前置相機存取也失敗：', fallbackError);
-                            setError('無法存取任何相機，請檢查設備設置');
-                        }
+                        setError('無法存取後置相機，請檢查權限設定。');
                     }
                 }
                 setup();
@@ -168,27 +165,20 @@
                         console.log("Tesseract Worker 已終止");
                     }
                 };
-            }, []);
+            }, [error]);
 
             // 處理文字辨識
             async function recognizeText() {
-                if (isProcessing || !videoRef.current || !canvasRef.current || !tesseractWorkerRef.current) {
-                    console.log("無法執行辨識：", {
-                        isProcessing,
-                        hasVideo: !!videoRef.current,
-                        hasCanvas: !!canvasRef.current,
-                        hasWorker: !!tesseractWorkerRef.current
-                    });
-                    setError("無法執行辨識：缺少必要元件或正在處理");
+                if (isProcessing || !videoRef.current?.srcObject || !canvasRef.current || !tesseractWorkerRef.current) {
+                    setError("辨識元件尚未準備就緒");
                     return;
                 }
 
                 if (!videoRef.current.videoWidth || !videoRef.current.videoHeight) {
-                    console.log("視頻未準備好");
-                    setError("相機未準備好，請稍後重試");
+                    setError("相機影像尚未載入，請稍後重試");
                     return;
                 }
-
+                
                 setIsProcessing(true);
                 setError('');
                 const canvas = canvasRef.current;
@@ -201,33 +191,29 @@
                     console.log("正在進行文字辨識...");
                     const { data: { text } } = await tesseractWorkerRef.current.recognize(canvas);
                     console.log("原始辨識文字：", text);
-                    const lines = text.split('\n').map(line => line.trim());
-                    const englishWord = lines.find(line => /^[A-Za-z]+$/.test(line)) || '';
+                    const lines = text.split('\n').map(line => line.trim().replace(/[^a-zA-Z]/g, ''));
+                    const englishWord = lines.find(line => /^[A-Za-z]{3,}$/.test(line)) || ''; // 至少3個字母
 
                     if (englishWord) {
                         if (lastRecognizedTextRef.current === englishWord) {
                             stableCountRef.current += 1;
-                            console.log("穩定計數增加：", stableCountRef.current);
                         } else {
-                            stableCountRef.current = 0;
+                            stableCountRef.current = 1; // 第一次辨識到就從1開始
                             lastRecognizedTextRef.current = englishWord;
-                            setRecognizedText('');
-                            console.log("新單詞，穩定計數重置：", englishWord);
+                            console.log("辨識到新單詞：", englishWord);
                         }
 
                         if (stableCountRef.current >= stabilityThreshold) {
-                            console.log("穩定單詞辨識：", englishWord);
+                            console.log("穩定辨識到單詞：", englishWord);
                             setRecognizedText(englishWord);
+                            // 成功辨識後重置，避免重複觸發
+                            stableCountRef.current = 0; 
+                            lastRecognizedTextRef.current = null;
                         }
-                    } else {
-                        console.log("未找到有效英文單詞");
-                        stableCountRef.current = 0;
-                        lastRecognizedTextRef.current = null;
-                        setRecognizedText('');
                     }
                 } catch (error) {
                     console.error('文字辨識失敗：', error);
-                    setError('文字辨識失敗，請確保文字清晰並重試');
+                    setError('文字辨識失敗，請確保文字清晰且光線充足');
                 } finally {
                     setIsProcessing(false);
                 }
@@ -238,46 +224,58 @@
                 if (recognizedText) {
                     setIsProcessing(true);
                     console.log("正在為單詞生成句子：", recognizedText);
-                    GeminiAPIClient.generateSentences(recognizedText).then(result => {
-                        setSentences(result);
-                        setShowModal(result.length > 0);
-                        setIsProcessing(false);
-                        console.log("句子生成完成，顯示 Modal：", result.length > 0);
-                    });
+                    GeminiAPIClient.generateSentences(recognizedText)
+                        .then(result => {
+                            setSentences(result);
+                            if (result.length > 0) {
+                                setShowModal(true);
+                            } else {
+                                setError("成功辨識單詞，但無法生成句子。");
+                            }
+                        })
+                        .catch(err => {
+                             setError(`句子生成失敗：${err.message}`);
+                        })
+                        .finally(() => {
+                             setIsProcessing(false);
+                        });
                 }
             }, [recognizedText]);
 
             return (
-                <div className="max-w-2xl mx-auto p-4">
+                <div className="max-w-2xl mx-auto p-4 w-full">
                     <h1 className="text-3xl font-bold text-center text-gray-900 dark:text-white mb-6">
                         單詞句子生成器
                     </h1>
                     {error && (
-                        <div className="bg-red-100 text-red-700 p-4 rounded-lg mb-4">
-                            {error}
+                        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg relative mb-4" role="alert">
+                            <strong className="font-bold">發生錯誤：</strong>
+                            <span className="block sm:inline">{error}</span>
                         </div>
                     )}
-                    <div className="relative bg-gray-200 rounded-lg overflow-hidden mb-6">
+                    <div className="relative bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden mb-6 shadow-lg">
                         <video
                             ref={videoRef}
-                            className="w-full h-64 object-cover"
+                            className="w-full h-auto object-cover"
                             autoPlay
                             muted
                             playsInline
                         ></video>
+                        <div className="absolute inset-0 flex items-center justify-center p-8 pointer-events-none">
+                           <div className="w-full h-1/3 border-4 border-dashed border-white border-opacity-75 rounded-lg"></div>
+                        </div>
                         <canvas ref={canvasRef} className="hidden"></canvas>
                     </div>
                     <button
                         onClick={recognizeText}
                         disabled={isProcessing}
-                        className={`w-full py-3 text-white text-lg font-semibold rounded-lg flex items-center justify-center ${
-                            isProcessing ? 'bg-blue-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-600'
+                        className={`w-full py-3 text-white text-lg font-semibold rounded-lg flex items-center justify-center transition-colors duration-300 ${
+                            isProcessing ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'
                         }`}
                     >
                         {isProcessing ? (
-                            <svg className="animate-spin h-5 w-5 mr-2" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            <svg className="animate-spin h-5 w-5 mr-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
                             </svg>
                         ) : null}
                         {isProcessing ? '處理中...' : '辨識並生成句子'}
@@ -290,8 +288,6 @@
                                 setShowModal(false);
                                 setSentences([]);
                                 setRecognizedText('');
-                                stableCountRef.current = 0;
-                                lastRecognizedTextRef.current = null;
                                 console.log("Modal 關閉，重置狀態");
                             }}
                         />
@@ -300,7 +296,6 @@
             );
         }
 
-        // 渲染應用程式
         ReactDOM.render(<App />, document.getElementById('root'));
     </script>
 </body>
